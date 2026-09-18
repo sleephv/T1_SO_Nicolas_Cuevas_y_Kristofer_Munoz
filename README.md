@@ -17,7 +17,7 @@
 
 ### Compilación estricta
 ```bash
-# Si usas C++ (recomendado según rúbrica)
+# En C++
 g++ -Wall -Wextra -std=c++17 -lpthread planificador.cpp -o planificador
 
 # Si usas C
