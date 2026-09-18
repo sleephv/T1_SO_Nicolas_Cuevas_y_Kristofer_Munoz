@@ -20,5 +20,5 @@
 # En C++
 g++ -Wall -Wextra -std=c++17 -lpthread planificador.cpp -o planificador
 
-# Si usas C
+# En C
 gcc -Wall -Wextra -std=c17 -lpthread planificador.c -o planificador
