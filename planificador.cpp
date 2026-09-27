@@ -1,221 +1,221 @@
-#include <iostream>  
-#include <fstream>   // Para leer el archivo plan.txt
-#include <sstream>   // Para separar los textos de cada línea
-#include <vector>    // Para guardar nuestras actividades dinámicamente
-#include <string>    // Para manejar textos
-#include <cstdlib>   // Para funciones como exit() o stoi()
-#include <unistd.h>  // Aquí vive la syscall fork()
-#include <sys/wait.h>// Aquí vive la syscall waitpid()
-#include <random>    // Para generar tiempos aleatorios si faltan
-#include <cstring>   
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <string>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <cstring>
+#include <csignal>
+#include <algorithm>
+#include <cstdlib> // Para rand()
+#include <ctime>   // Para time()
 
 using namespace std;
-enum Estado { PENDIENTE, EN_EJECUCION, TERMINADO };
 
-// Estructura que representa un nodo de nuestro Grafo (DAG)
+vector<pid_t> pids_activos_global;
+
+void manejar_seremi(int sig) {
+    (void)sig; // Evita el warning del compilador por parámetro sin usar
+    cout << "\n\n[SEREMI] ¡Inspección de salubridad sorpresa (Ctrl+C) detectada!" << endl;
+    cout << "[SEREMI] Abortando todos los procesos activos..." << endl;
+    
+    for (pid_t pid : pids_activos_global) {
+        kill(pid, SIGTERM);
+    }
+    
+    cout << "[SEREMI] Clausura completada. Saliendo del planificador limpiamente." << endl;
+    exit(1);
+}
+
+enum Estado { PENDIENTE, EJECUTANDO, TERMINADO, ABORTADO };
+
 struct Actividad {
     string id;
     string nombre;
     int tiempo_ms;
-    vector<string> dependencias; // Guarda los IDs de las tareas que deben terminar antes
-    std::size_t dependencias_pendientes; // Contador de dependencias que aún no se han completado
-    Estado estado = PENDIENTE; 
-    int depencias_pendientes = 0; // Contador de dependencias que aún no se han completado
-    pid_t pid = -1; // PID del proceso hijo que ejecuta esta actividad
-    int pipe_fd[2]; // Descriptor de archivos para el pipe
+    vector<string> dependencias; 
+    
+    Estado estado = PENDIENTE;
+    int dependencias_pendientes = 0; 
+    pid_t pid = -1; 
+    int pipe_fd[2]; 
 };
 
-int main(int argc, char* argv[]) {
-    // 1. Validar que el usuario nos pase exactamente 3 argumentos
-    // (Ejemplo: ./planificador plan.txt 3)
-    if (argc != 3) {
-        cerr << "Error de uso. Forma correcta: " << argv[0] << " <archivo.txt> <K>" << endl;
-        return 1; // Salimos con error
+// Función para abortar en cadena si una tarea principal falla
+void abortar_rama(string id_fallida, vector<Actividad>& lista) {
+    for (auto& act : lista) {
+        if (act.estado == PENDIENTE) {
+            for (const string& dep : act.dependencias) {
+                if (dep == id_fallida) {
+                    act.estado = ABORTADO;
+                    cout << "[AISLAMIENTO] Abortando: " << act.nombre 
+                         << " (Dependía de actividad fallida: " << id_fallida << ")" << endl;
+                    
+                    // Llamada recursiva para abortar a los que dependían de esta
+                    abortar_rama(act.id, lista);
+                    break;
+                }
+            }
+        }
     }
+}
 
-    // 2. Guardar los argumentos en variables amigables
-    string nombre_archivo = argv[1];
-    int limite_K = stoi(argv[2]); // stoi convierte de texto ("3") a número (3)
 
-    // 3. Validar que K tenga sentido
-    if (limite_K <= 0) {
-        cerr << "Error: El límite de concurrencia K debe ser mayor a 0." << endl;
+int main(int argc, char* argv[]) {
+    // 1. Validar argumentos
+    if (argc != 3) {
+        cerr << "Uso: ./planificador <archivo.txt> <K_procesos_concurrentes>" << endl;
         return 1;
     }
 
-    // Un mensajito para ver que vamos bien
-    cout << "Iniciando simulador con K=" << limite_K << " y archivo: " << nombre_archivo << endl;
+    string archivo_nombre = argv[1];
+    int limite_K = stoi(argv[2]);
 
-    // 4. Abrir el archivo plan.txt
-    ifstream archivo(nombre_archivo);
+    // 2. Leer archivo y armar el grafo
+    ifstream archivo(archivo_nombre);
     if (!archivo.is_open()) {
-        cerr << "Error: No se pudo abrir el archivo " << nombre_archivo << endl;
+        cerr << "Error al abrir el archivo: " << archivo_nombre << endl;
         return 1;
     }
 
     vector<Actividad> lista_actividades;
     string linea;
+    srand(time(NULL)); // Inicializar semilla para fallos aleatorios
 
-    // 5. Leer línea por línea
     while (getline(archivo, linea)) {
-        if (linea.empty()) continue; // Ignorar líneas en blanco
-
+        if (linea.empty()) continue;
+        
         stringstream ss(linea);
-        string id, nombre, tiempo_str, deps_str;
-
-        // Extraer los campos separados por ':'
-        getline(ss, id, ':');
-        getline(ss, nombre, ':');
-        getline(ss, tiempo_str, ':');
-        getline(ss, deps_str); // El resto son las dependencias
-
         Actividad nueva_act;
         
-        // Limpiamos posibles espacios extra en el ID y Nombre
-        id.erase(0, id.find_first_not_of(" \t\r\n"));
-        id.erase(id.find_last_not_of(" \t\r\n") + 1);
-        nombre.erase(0, nombre.find_first_not_of(" \t\r\n"));
-        nombre.erase(nombre.find_last_not_of(" \t\r\n") + 1);
+        getline(ss, nueva_act.id, ',');
+        getline(ss, nueva_act.nombre, ',');
         
-        nueva_act.id = id;
-        nueva_act.nombre = nombre;
-
-        // Limpiar espacios en blanco del tiempo
-        if (!tiempo_str.empty() && tiempo_str.find_first_not_of(" \t\r\n") != string::npos) {
-            tiempo_str.erase(0, tiempo_str.find_first_not_of(" \t\r\n"));
-            tiempo_str.erase(tiempo_str.find_last_not_of(" \t\r\n") + 1);
-        } else {
-            tiempo_str = ""; // Asegurarnos de que quede vacío si solo eran espacios
-        }
-
-        // Si no hay tiempo, generar uno aleatorio entre 100 y 5000 ms (Regla de la rúbrica)
+        string tiempo_str;
+        getline(ss, tiempo_str, ',');
         if (tiempo_str.empty()) {
-            random_device rd;
-            mt19937 gen(rd());
-            uniform_int_distribution<> dis(100, 5000);
-            nueva_act.tiempo_ms = dis(gen);
+            nueva_act.tiempo_ms = 100 + rand() % 4901; 
         } else {
             nueva_act.tiempo_ms = stoi(tiempo_str);
         }
 
-        // Procesar dependencias (deps_str) separándolas por comas
-        if (!deps_str.empty()) {
-            stringstream ss_deps(deps_str);
-            string dep;
-            while (getline(ss_deps, dep, ',')) {
-                // Limpiar espacios en blanco al inicio y al final de cada dependencia
-                if (dep.find_first_not_of(" \t\r\n") != string::npos) {
-                    dep.erase(0, dep.find_first_not_of(" \t\r\n"));
-                    dep.erase(dep.find_last_not_of(" \t\r\n") + 1);
-                    if (!dep.empty()) {
-                        nueva_act.dependencias.push_back(dep);
-                    }
-                }
+        string dep;
+        while (getline(ss, dep, ',')) {
+            if (!dep.empty() && dep != "Ninguna") {
+                nueva_act.dependencias.push_back(dep);
             }
         }
         
+        nueva_act.dependencias_pendientes = nueva_act.dependencias.size();
         lista_actividades.push_back(nueva_act);
-        
-        // Mostrar en pantalla para confirmar que leyó todo bien
-        cout << "Actividad cargada -> ID: " << nueva_act.id 
-             << " | Nombre: " << nueva_act.nombre 
-             << " | Tiempo: " << nueva_act.tiempo_ms << "ms"
-             << " | Dependencias: ";
-        
-        if (nueva_act.dependencias.empty()) {
-            cout << "Ninguna";
-        } else {
-            for (const string& d : nueva_act.dependencias) {
-                cout << d << " ";
-            }
-        }
-        cout << endl;
     }
+    archivo.close();
+
+    // 3. Configurar señales e iniciar simulación
+    signal(SIGINT, manejar_seremi);
     int procesos_activos = 0;
-    int tareas_terminadas = 0;
     int total_tareas = lista_actividades.size();
 
-    // 1. Contar cuántas dependencias tiene que esperar cada tarea al inicio
-    for (auto& act : lista_actividades) {
-        act.dependencias_pendientes = act.dependencias.size();
-    }
+    cout << "\n--- INICIANDO PLANIFICADOR DIE CIOCHERO (K=" << limite_K << ") ---" << endl;
 
-    cout << "\n--- INICIANDO SIMULACIÓN DIE CIOCHERA ---" << endl;
+    // Bucle principal (Termina cuando todas las tareas están TERMINADAS o ABORTADAS)
+    while (true) {
+        int tareas_completadas = 0;
+        for (const auto& act : lista_actividades) {
+            if (act.estado == TERMINADO || act.estado == ABORTADO) {
+                tareas_completadas++;
+            }
+        }
+        if (tareas_completadas == total_tareas) break;
 
-   // Bucle principal: se repite hasta que todas las tareas estén TERMINADAS
-    while (tareas_terminadas < total_tareas) {
-        
-        // Lanzar nuevas tareas si tenemos espacio
+        // Lanzar nuevas tareas
         for (auto& act : lista_actividades) {
             if (procesos_activos >= limite_K) break; 
 
             if (act.estado == PENDIENTE && act.dependencias_pendientes == 0) {
                 
-                // NUEVO: Crear la tubería (pipe) ANTES del fork
                 if (pipe(act.pipe_fd) == -1) {
-                    cerr << "Error al crear el pipe para " << act.nombre << endl;
+                    cerr << "Error al crear el pipe." << endl;
                     return 1;
                 }
 
                 pid_t pid = fork(); 
 
                 if (pid == 0) {
-                    // ---- CÓDIGO DEL PROCESO HIJO ----
-                    close(act.pipe_fd[0]); // El hijo no va a leer, cerramos ese extremo
-
-                    cout << "[HIJO] Iniciando: " << act.nombre << " (PID: " << getpid() << ")" << endl;
-                    usleep(act.tiempo_ms * 1000); // Simulamos el trabajo
+                    // --- HIJO ---
+                    close(act.pipe_fd[0]); 
+                    cout << "[HIJO] Ejecutando: " << act.nombre << " (PID: " << getpid() << ") - " << act.tiempo_ms << "ms" << endl;
                     
-                    // NUEVO: El hijo escribe el mensaje en el pipe antes de terminar
+                    usleep(act.tiempo_ms * 1000); 
+                    
+                    // Simular un fallo aleatorio (15% de probabilidad)
+                    int suerte = rand() % 100;
+                    if (suerte < 15) {
+                        cout << "[ERROR] Fallo crítico interno en: " << act.nombre << " (PID: " << getpid() << ")" << endl;
+                        close(act.pipe_fd[1]);
+                        exit(1); // Retorna error
+                    }
+
                     string mensaje = "¡Insumo de " + act.nombre + " listo!";
                     write(act.pipe_fd[1], mensaje.c_str(), mensaje.length() + 1);
-                    close(act.pipe_fd[1]); // Cerramos escritura
+                    close(act.pipe_fd[1]);
                     
-                    exit(0); 
+                    exit(0); // Retorna éxito
                 } 
                 else if (pid > 0) {
-                    // ---- CÓDIGO DEL PROCESO PADRE ----
+                    // --- PADRE ---
                     act.pid = pid;          
-                    act.estado = EN_EJECUCION; 
+                    act.estado = EJECUTANDO; 
                     procesos_activos++;     
-                    close(act.pipe_fd[1]); // NUEVO: El padre no va a escribir, cierra ese extremo
+                    close(act.pipe_fd[1]); 
+                    pids_activos_global.push_back(pid); // Anotar para la Seremi
                 }
             }
         }
 
-        // Esperar a que algún proceso hijo termine
+        // Atender a los hijos que terminan
         if (procesos_activos > 0) {
             int status;
             pid_t pid_terminado = wait(&status); 
 
             if (pid_terminado > 0) {
                 procesos_activos--;
-                tareas_terminadas++;
+                pids_activos_global.erase(remove(pids_activos_global.begin(), pids_activos_global.end(), pid_terminado), pids_activos_global.end());
 
-                // Buscar qué actividad terminó
                 for (auto& act : lista_actividades) {
                     if (act.pid == pid_terminado) {
-                        act.estado = TERMINADO;
                         
-                        // NUEVO: El padre lee el mensaje que dejó el hijo en el pipe
-                        char buffer[256];
-                        read(act.pipe_fd[0], buffer, sizeof(buffer));
-                        close(act.pipe_fd[0]); // Cerramos lectura
+                        // Si el hijo terminó correctamente (exit 0)
+                        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                            act.estado = TERMINADO;
+                            
+                            char buffer[256];
+                            read(act.pipe_fd[0], buffer, sizeof(buffer));
+                            close(act.pipe_fd[0]); 
 
-                        cout << "[MENSAJE PIPE] " << buffer << endl;
+                            cout << "[MENSAJE PIPE] " << buffer << endl;
 
-                        // Avisar a las demás tareas y propagar el mensaje
-                        for (auto& dep_act : lista_actividades) {
-                            if (dep_act.estado == PENDIENTE) {
-                                for (const string& dep : dep_act.dependencias) {
-                                    if (dep == act.id) {
-                                        dep_act.dependencias_pendientes--;
-                                        cout << " -> Propagando a: " << dep_act.nombre 
-                                             << " (Faltan " << dep_act.dependencias_pendientes << " dependencias)" << endl;
-                                        break;
+                            // Propagar a dependencias
+                            for (auto& dep_act : lista_actividades) {
+                                if (dep_act.estado == PENDIENTE) {
+                                    for (const string& dep : dep_act.dependencias) {
+                                        if (dep == act.id) {
+                                            dep_act.dependencias_pendientes--;
+                                            break;
+                                        }
                                     }
                                 }
                             }
+                        } 
+                        // Si el hijo falló (exit distinto de 0)
+                        else {
+                            act.estado = ABORTADO;
+                            close(act.pipe_fd[0]);
+                            cout << "[PADRE] Detectado fallo en proceso " << act.nombre << ". Aislando errores..." << endl;
+                            
+                            // Abortar todo lo que dependía de esta rama
+                            abortar_rama(act.id, lista_actividades);
                         }
                         break;
                     }
@@ -223,10 +223,7 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-    cout << "--- SIMULACIÓN FINALIZADA CORRECTAMENTE ---" << endl;
-    // =================================================================
-
-    archivo.close();
-
-    return 0; // Termina el programa con éxito
+    
+    cout << "--- SIMULACIÓN FINALIZADA ---" << endl;
+    return 0;
 }
