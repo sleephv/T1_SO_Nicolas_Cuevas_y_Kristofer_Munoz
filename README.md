@@ -51,7 +51,7 @@ make
 El simulador requiere de dos parametros posicionales: el archivo con el plan de actividades y el límite de concurrencia de actividades $K$.
 
 ```bash
-./planificador plan.txt $K$.
+./planificador plan.txt `K`.
 ```
 --- 
 
@@ -61,7 +61,7 @@ Para validar el ítem de la rúbrica referente a la carga de trabajo masiva, se 
 
 ```bash
 python3 generador.py
-./planificador plan_estres.txt $K$
+./planificador plan_estres.txt `K`
 ```
 ---
 ## 6. Limpieza de archivos
