@@ -1,7 +1,7 @@
 # T1 - Planificador Dieciochero (Sistemas Operativos - UDP)
 
 **Integrantes:**
-- Nicolás Cuevas
+- Nicolas Cuevas
 - Kristofer Muñoz
 
 Simulador en C++ para la planificación y ejecución concurrente de actividades de un asado dieciochero. El sistema modela las tareas mediante un Grafo Acíclico Dirigido (DAG) y gestiona su ejecución estricta a través de multiprocesamiento, respetando dependencias, límites de concurrencia y aplicando tolerancia a fallos.
