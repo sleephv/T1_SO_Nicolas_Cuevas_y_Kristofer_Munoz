@@ -11,7 +11,7 @@
 #include <cstdlib>   // Para usar exit(), rand() y srand() (para la probabilidad del 15%)
 #include <ctime>     // Para obtener la hora del sistema con time() y hacer que rand() sea realmente aleatorio
 
-using namespace std;
+using namespace std; // Evita tener que escribir std:: antes de cada cosa (cout, string, vector, etc.)
 
 // Variable global para que la señal de la SEREMI sepa qué procesos (PIDs) están corriendo y pueda matarlos.
 vector<pid_t> pids_activos_global;
