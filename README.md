@@ -1,24 +1,37 @@
 # T1 - Planificador Dieciochero (Sistemas Operativos - UDP)
 
 **Integrantes:**
-- Nicolas Cuevas
+- Nicolás Cuevas
 - Kristofer Muñoz
+
+Simulador en C++ para la planificación y ejecución concurrente de actividades de un asado dieciochero. El sistema modela las tareas mediante un Grafo Acíclico Dirigido (DAG) y gestiona su ejecución estricta a través de multiprocesamiento, respetando dependencias, límites de concurrencia y aplicando tolerancia a fallos.
 
 ---
 
-## 1. Funciones Implementadas
-- **Parseo (`parse_plan`)**: Lee `plan.txt` ignorando líneas vacías, extrayendo ID, nombre, tiempo (si viene vacío, asigna aleatorio entre 100 y 5000 ms) y dependencias.
-- **Modelado DAG**: Representa las actividades como un grafo acíclico dirigido en memoria (listas/vectores de adyacencia).
-- **Control de Concurrencia**: Semaforización / control de procesos activos para no superar nunca $K$ procesos simultáneos.
-- **Pipes (IPC)**: Creación de tuberías anónimas por nodo/arista para propagar insumos al finalizar una actividad dependiente.
-- **Aislamiento de errores / Señales**: Manejo de `SIGINT` (Ctrl+C) para abortar todo el árbol de procesos, e isolación por rama en caso de fallo interno de un proceso hijo.
+## 1. Funciones Implementadas y Requisitos Cumplidos
 
-## 2. Modo de Uso
+El sistema cumple con la totalidad de los requerimientos técnicos solicitados en la rúbrica:
 
-### Compilación estricta
+- **Parseo y Modelado (DAG):** Lectura robusta de `plan.txt` ignorando líneas vacías y limpiando espacios. Extrae ID, nombre, tiempo y dependencias. Si el tiempo de ejecución no se especifica, el sistema autogenera uno aleatorio entre 100 ms y 5000 ms. Las actividades se representan en memoria como un grafo de dependencias con estados controlados (`PENDIENTE`, `EJECUTANDO`, `TERMINADO`, `ABORTADO`).
+- **Multiprocesamiento Puro:** Creación de procesos utilizando estrictamente las llamadas al sistema `fork()` y `wait()`. No se recurre al uso de hilos (`threads`).
+- **Control de Concurrencia (Límite K):** El proceso padre actúa como orquestador, contabilizando los procesos activos para asegurar que **nunca** se supere el límite máximo de $K$ tareas ejecutándose simultáneamente.
+- **Comunicación IPC (Pipes):** Uso de tuberías unidireccionales (tuberías anónimas / `pipe()`) creadas antes de cada `fork()`. Al finalizar, cada proceso hijo escribe un mensaje de éxito ("¡Insumo de [Actividad] listo!") que el padre lee para propagar la finalización a las tareas dependientes.
+- **Aislamiento de Errores (Fallo Simulado):** Cada proceso hijo posee un 15% de probabilidad de fallar internamente y devolver un código de error (`exit(1)`). El proceso padre detecta esta anomalía y ejecuta una función recursiva que **aborta en cadena** únicamente la rama de tareas que dependía de la actividad fallida, permitiendo que el resto del grafo finalice su ejecución.
+- **Manejo de Señales (Inspección Seremi):** Captura de la señal `SIGINT` (Ctrl+C) a través de `<csignal>`. Al recibir la interrupción, el planificador aborta el plan, envía la señal `SIGTERM` a todos los procesos hijos activos en su lista global y limpia los procesos zombies mediante `wait(NULL)` antes de cerrarse limpiamente.
+
+---
+
+## 2. Requisitos del Sistema
+
+- Entorno Linux o WSL (Windows Subsystem for Linux).
+- Compilador `g++` con soporte para el estándar C++17.
+- Herramienta `make`.
+
+---
+
+## 3. Modo de Uso
+
+### Compilación Estricta Automática
+El proyecto incluye un archivo `Makefile` configurado con las banderas estrictas exigidas. Para compilar, simplemente abre la terminal en el directorio del proyecto y ejecuta:
 ```bash
-# En C++
-g++ -Wall -Wextra -std=c++17 -lpthread planificador.cpp -o planificador
-
-# En C
-gcc -Wall -Wextra -std=c17 -lpthread planificador.c -o planificador
+make
